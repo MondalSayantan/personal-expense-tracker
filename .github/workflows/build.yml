@@ -4,24 +4,24 @@ on:
   push:
     branches: [main]
 
-# ──────────────────────────────  repository‑level permissions  ──────────────────────────────
+# ───────────────────────────── repository‑level permissions ─────────────────────────────
 permissions:
-  contents: write # lets the workflow create tags & releases
+  contents: write # needed for creating tags & releases
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed inside the job as well
+      contents: write # same permission inside the job
 
     steps:
-      # ──────────────────────────────  checkout  ──────────────────────────────
+      # ───────────────────────────── checkout ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # fetch full history + tags so we can check for existing versions
+          fetch-depth: 0 # we need full history & tags for version check
 
-      # ──────────────────────────────  toolchains  ───────────────────────────
+      # ───────────────────────────── toolchains ───────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -34,7 +34,7 @@ jobs:
           flutter-version: "3.29.3"
           channel: stable
 
-      # (optional) cache Pub dependencies to speed up subsequent runs
+      # (optional) cache Pub dependencies
       - name: Cache Pub cache
         uses: actions/cache@v4
         with:
@@ -46,19 +46,23 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # ──────────────────────────────  verify secrets early  ─────────────────
+      # ───────────────────────────── accept Android licences ──────────────
+      - name: Accept Android SDK licences
+        run: yes | flutter doctor --android-licenses
+
+      # ───────────────────────────── verify secret early ──────────────────
       - name: Verify MONGODB_URI secret
         env:
           MONGO_SECRET: ${{ secrets.MONGODB_URI }}
         run: |
           if [ -z "$MONGO_SECRET" ]; then
-            echo "::error::❌  MONGODB_URI secret is not configured in the repository."
-            echo "        👉  Go to Settings ▸ Secrets ▸ Actions and add it."
+            echo "::error::❌  MONGODB_URI secret is not configured."
+            echo "        👉  Settings ▸ Secrets ▸ Actions ▸ New repository secret."
             exit 1
           fi
           echo "✅ MONGODB_URI secret detected"
 
-      # ──────────────────────────────  versioning & tags  ────────────────────
+      # ───────────────────────────── version/tag logic ────────────────────
       - name: Extract version from pubspec.yaml
         id: version
         run: |
@@ -78,59 +82,61 @@ jobs:
             echo "🔖 Tag v${{ steps.version.outputs.VERSION }} does not exist."
           fi
 
-      - name: Exit early if this version is already released
+      - name: Exit early if release already published
         if: steps.tag_exists.outputs.TAG_EXISTS == 'true'
         run: |
-          echo "🚫 Release already published for v${{ steps.version.outputs.VERSION }}. Skipping."
+          echo "🚫 Release v${{ steps.version.outputs.VERSION }} already exists. Skipping."
           exit 0
 
-      # ──────────────────────────────  environment info  ────────────────────
+      # ───────────────────────────── environment info ─────────────────────
       - name: Print Flutter environment
         run: |
           flutter --version
           flutter doctor -v
 
-      # ──────────────────────────────  build (verbose)  ──────────────────────
-      - name: Build release APK (capture full log)
+      # ───────────────────────────── build (verbose, log to file) ─────────
+      - name: Build release APK (full log)
+        id: flutter_build
         run: |
           set -eo pipefail
           echo "::group::flutter build apk"
+          # Run the build, capture every byte, *and* stream to console
           flutter build apk -v --release \
             --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }} 2>&1 | tee flutter_build.log
           echo "::endgroup::"
 
-      # upload the verbose build log for later inspection
       - name: Upload Flutter build log
         uses: actions/upload-artifact@v4
         with:
           name: flutter-build-log
           path: flutter_build.log
 
-      # ──────────────────────────────  quick tree listing  ───────────────────
-      - name: List build outputs (first 150 lines)
-        run: |
-          echo "📂 build tree ↓"
-          ls -R build | head -n 150 || true
-
-      # ──────────────────────────────  locate artefact  ───────────────────────
+      # ───────────────────────────── locate APK by parsing the log ────────
       - name: Locate release APK
         id: locate_apk
         run: |
           set -e
-          # find any *release*.apk anywhere under build/
-          APK_PATH=$(find build -type f -name '*release*.apk' | head -n1)
+          # First, try to parse the path Flutter prints: "Built <path‑to‑apk> (xx MB)."
+          APK_PATH=$(grep -oE 'build/[^ ]+\.apk' flutter_build.log | head -n1 || true)
+
+          # Fallback: brute‑force search if the above failed
+          if [[ -z "$APK_PATH" ]]; then
+            APK_PATH=$(find build -type f -name '*release*.apk' | head -n1 || true)
+          fi
+
           if [[ -z "$APK_PATH" ]]; then
             echo "::error::No release APK produced by the build."
             exit 1
           fi
+
           echo "✅ Found APK at $APK_PATH"
           echo "APK_PATH=$APK_PATH" >> "$GITHUB_OUTPUT"
           cp "$APK_PATH" ./app-release.apk
 
       - name: Verify final artefact
-        run: ls -l ./app-release.apk
+        run: ls -lh ./app-release.apk
 
-      # ──────────────────────────────  GitHub Release  ───────────────────────
+      # ───────────────────────────── make GitHub Release ──────────────────
       - name: Create GitHub release and upload APK
         uses: ncipollo/release-action@v1
         with:
