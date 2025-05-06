@@ -43,7 +43,13 @@ class _HomeScreenState extends State<HomeScreen> {
         Provider.of<ExpenseProvider>(context, listen: false);
 
     // Get MongoDB URL from environment variables
-    final mongoUrl = dotenv.env['MONGODB_URI'] ?? '';
+    // This works with both dotenv for local development and --dart-define for production builds
+    String mongoUrl = const String.fromEnvironment('MONGODB_URI', defaultValue: '');
+    
+    // Fallback to dotenv if not provided via --dart-define (for local development)
+    if (mongoUrl.isEmpty) {
+      mongoUrl = dotenv.env['MONGODB_URI'] ?? '';
+    }
 
     // Handle the case where MongoDB URI is missing
     if (mongoUrl.isEmpty) {

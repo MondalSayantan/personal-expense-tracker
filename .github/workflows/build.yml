@@ -25,10 +25,6 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Create .env file
-        run: |
-          echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" > .env
-          
       # Extract version from pubspec.yaml
       - name: Extract Version
         id: version
@@ -44,7 +40,7 @@ jobs:
           echo "TAG_EXISTS=$TAG_EXISTS" >> $GITHUB_OUTPUT
           
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
       
       # Create tag if it doesn't exist
       - name: Create Tag
