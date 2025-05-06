@@ -7,6 +7,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Add permission to create tags and releases
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
       
@@ -49,7 +52,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git tag -a v${{ steps.version.outputs.VERSION }} -m "Release v${{ steps.version.outputs.VERSION }}"
-          git push origin v${{ steps.version.outputs.VERSION }}
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git --tags
 
       # Create GitHub Release
       - name: Create Release
