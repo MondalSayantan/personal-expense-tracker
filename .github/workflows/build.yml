@@ -3,6 +3,10 @@ name: Build and Release
 on:
   push:
     branches: [ main ]
+    
+# Set permissions for GitHub token
+permissions:
+  contents: write # Needed for creating releases
 
 jobs:
   build:
@@ -42,45 +46,41 @@ jobs:
           TAG_EXISTS=$(git ls-remote --tags origin refs/tags/v${{ steps.version.outputs.VERSION }} | wc -l)
           echo "TAG_EXISTS=$TAG_EXISTS" >> $GITHUB_OUTPUT
           
-      - name: Build APK
+      # Debug Flutter and verify it's working correctly
+      - name: Debug Flutter
         run: |
-          echo "Starting APK build..."
-          flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
-          # Check if build directory exists before trying to list it
-          if [ -d "build/app/outputs/flutter-apk" ]; then
-            ls -la build/app/outputs/flutter-apk/
-            if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-              echo "APK size: $(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)"
-            else
-              echo "WARNING: APK file not found!"
-              exit 1
-            fi
+          flutter --version
+          flutter doctor -v
+          
+      # Build APK with simpler approach
+      - name: Build APK
+        run: flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+        
+      # Verify the APK was created
+      - name: Verify APK
+        run: |
+          mkdir -p build/outputs  # Create directory if it doesn't exist
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ APK build successful"
+            cp build/app/outputs/flutter-apk/app-release.apk ./app-release.apk
+            ls -la .
           else
-            echo "WARNING: Build directory not found!"
+            echo "❌ APK build failed - file not found"
+            find build -type f -name "*.apk" || echo "No APK files found in build directory"
             exit 1
           fi
       
-      # Create tag if it doesn't exist
-      - name: Create Tag
-        if: steps.check_tag.outputs.TAG_EXISTS == '0'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git tag -a v${{ steps.version.outputs.VERSION }} -m "Release v${{ steps.version.outputs.VERSION }}"
-          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git --tags
-
-      # Create GitHub Release
+      # Create release with the APK
       - name: Create Release
-        if: steps.check_tag.outputs.TAG_EXISTS == '0'
         id: create_release
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: v${{ steps.version.outputs.VERSION }}
+          tag: v${{ steps.version.outputs.VERSION }}
           name: Release v${{ steps.version.outputs.VERSION }}
-          files: |
-            build/app/outputs/flutter-apk/app-release.apk
-          body_path: CHANGELOG.md
+          bodyFile: CHANGELOG.md
           draft: false
           prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          artifacts: ./app-release.apk
+          artifactContentType: application/vnd.android.package-archive
