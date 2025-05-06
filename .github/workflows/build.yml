@@ -44,10 +44,21 @@ jobs:
           
       - name: Build APK
         run: |
+          echo "Starting APK build..."
           flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
-          # Debug output to verify APK was created
-          ls -la build/app/outputs/flutter-apk/
-          echo "APK size: $(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)"
+          # Check if build directory exists before trying to list it
+          if [ -d "build/app/outputs/flutter-apk" ]; then
+            ls -la build/app/outputs/flutter-apk/
+            if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+              echo "APK size: $(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)"
+            else
+              echo "WARNING: APK file not found!"
+              exit 1
+            fi
+          else
+            echo "WARNING: Build directory not found!"
+            exit 1
+          fi
       
       # Create tag if it doesn't exist
       - name: Create Tag
