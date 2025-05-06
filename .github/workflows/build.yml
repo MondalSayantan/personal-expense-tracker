@@ -43,7 +43,11 @@ jobs:
           echo "TAG_EXISTS=$TAG_EXISTS" >> $GITHUB_OUTPUT
           
       - name: Build APK
-        run: flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+        run: |
+          flutter build apk --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+          # Debug output to verify APK was created
+          ls -la build/app/outputs/flutter-apk/
+          echo "APK size: $(du -h build/app/outputs/flutter-apk/app-release.apk | cut -f1)"
       
       # Create tag if it doesn't exist
       - name: Create Tag
@@ -59,10 +63,13 @@ jobs:
         if: steps.check_tag.outputs.TAG_EXISTS == '0'
         id: create_release
         uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: Release v${{ steps.version.outputs.VERSION }}
-          files: build/app/outputs/flutter-apk/app-release.apk
+          files: |
+            build/app/outputs/flutter-apk/app-release.apk
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
