@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
 
-# Allow the workflow to create tags and releases
+# ──────────────────────────────  repository‑level permissions  ──────────────────────────────
 permissions:
-  contents: write
+  contents: write # lets the workflow create tags & releases
 
 jobs:
   build:
@@ -15,11 +15,13 @@ jobs:
       contents: write # needed inside the job as well
 
     steps:
-      # ────────────────────────────────  checkout  ────────────────────────────────
+      # ──────────────────────────────  checkout  ──────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # fetch full history + tags so we can check for existing versions
 
-      # ────────────────────────────────  toolchains  ─────────────────────────────
+      # ──────────────────────────────  toolchains  ───────────────────────────
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -32,8 +34,8 @@ jobs:
           flutter-version: "3.29.3"
           channel: stable
 
-      # (Optional) cache pub packages to speed up subsequent runs
-      - name: Cache pub cache
+      # (optional) cache Pub dependencies to speed up subsequent runs
+      - name: Cache Pub cache
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
@@ -44,19 +46,19 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # ────────────────────────────────  verify secrets  ──────────────────────────
+      # ──────────────────────────────  verify secrets early  ─────────────────
       - name: Verify MONGODB_URI secret
         env:
           MONGO_SECRET: ${{ secrets.MONGODB_URI }}
         run: |
           if [ -z "$MONGO_SECRET" ]; then
             echo "::error::❌  MONGODB_URI secret is not configured in the repository."
-            echo "        👉  Go to Settings ▸ Secrets and add it before retrying."
+            echo "        👉  Go to Settings ▸ Secrets ▸ Actions and add it."
             exit 1
           fi
           echo "✅ MONGODB_URI secret detected"
 
-      # ────────────────────────────────  versioning  ─────────────────────────────
+      # ──────────────────────────────  versioning & tags  ────────────────────
       - name: Extract version from pubspec.yaml
         id: version
         run: |
@@ -82,30 +84,41 @@ jobs:
           echo "🚫 Release already published for v${{ steps.version.outputs.VERSION }}. Skipping."
           exit 0
 
-      # ────────────────────────────────  build  ─────────────────────────────────
+      # ──────────────────────────────  environment info  ────────────────────
       - name: Print Flutter environment
         run: |
           flutter --version
           flutter doctor -v
 
-      - name: Build release APK
+      # ──────────────────────────────  build (verbose)  ──────────────────────
+      - name: Build release APK (capture full log)
         run: |
-          set -e
-          flutter build apk --release \
-            --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+          set -eo pipefail
+          echo "::group::flutter build apk"
+          flutter build apk -v --release \
+            --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }} 2>&1 | tee flutter_build.log
+          echo "::endgroup::"
 
-      # ────────────────────────────────  debugging output  ───────────────────────
-      - name: List build outputs (first 100 lines)
+      # upload the verbose build log for later inspection
+      - name: Upload Flutter build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-build-log
+          path: flutter_build.log
+
+      # ──────────────────────────────  quick tree listing  ───────────────────
+      - name: List build outputs (first 150 lines)
         run: |
-          echo "📂 build/app/outputs tree ↓"
-          ls -R build/app/outputs | head -n 100 || true
+          echo "📂 build tree ↓"
+          ls -R build | head -n 150 || true
 
-      # ────────────────────────────────  locate artefact  ────────────────────────
+      # ──────────────────────────────  locate artefact  ───────────────────────
       - name: Locate release APK
         id: locate_apk
         run: |
           set -e
-          APK_PATH=$(find build/app/outputs -type f -name '*release*.apk' | head -n1)
+          # find any *release*.apk anywhere under build/
+          APK_PATH=$(find build -type f -name '*release*.apk' | head -n1)
           if [[ -z "$APK_PATH" ]]; then
             echo "::error::No release APK produced by the build."
             exit 1
@@ -117,7 +130,7 @@ jobs:
       - name: Verify final artefact
         run: ls -l ./app-release.apk
 
-      # ────────────────────────────────  GitHub Release  ────────────────────────
+      # ──────────────────────────────  GitHub Release  ───────────────────────
       - name: Create GitHub release and upload APK
         uses: ncipollo/release-action@v1
         with:
