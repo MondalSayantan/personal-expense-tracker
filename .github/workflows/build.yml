@@ -150,11 +150,37 @@ jobs:
             echo "::warning::⚠️ No keystore provided. App will be signed with debug keys."
           fi
 
-      # ───────────────────────────── build (verbose, log to file) ─────────
-
+      # ───────────────────────────── build with improved timeout ─────────
+      
+      # Download Gradle dependencies separately to avoid timeouts
+      - name: Download Gradle dependencies
+        run: |
+          cd android
+          ./gradlew dependencies
+      
       - name: Build release APK
         id: flutter_build
-        run: flutter build apk -v --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+        timeout-minutes: 15  # Give enough time for the build to complete
+        run: |
+          # Ensure Android SDK licenses are accepted
+          yes | flutter doctor --android-licenses
+          
+          # Set the Java memory to avoid OOM issues
+          export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:MaxPermSize=1g -XX:+HeapDumpOnOutOfMemoryError'"
+          
+          # Build APK with verbose logging
+          flutter build apk --release --verbose \
+            --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+          
+          # Check if build succeeded
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "Build succeeded! APK created at build/app/outputs/flutter-apk/app-release.apk"
+            ls -la build/app/outputs/flutter-apk/
+          else
+            echo "Build failed or APK not found at expected location"
+            find build -name "*.apk"
+            exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -163,6 +189,27 @@ jobs:
           path: |
             build/app/outputs/flutter-apk/app-release.apk
 
+      # ───────────────────────────── prepare for GitHub Release ──────────────
+      - name: Find and rename APK for release
+        id: find_apk
+        run: |
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "APK found at expected location"
+            cp build/app/outputs/flutter-apk/app-release.apk ./expense-tracker-release.apk
+            echo "APK_PATH=./expense-tracker-release.apk" >> $GITHUB_OUTPUT
+          else
+            echo "Looking for APK in other locations..."
+            APK_PATH=$(find build -name "*release*.apk" | head -n 1)
+            if [ -n "$APK_PATH" ]; then
+              echo "Found APK at $APK_PATH"
+              cp "$APK_PATH" ./expense-tracker-release.apk
+              echo "APK_PATH=./expense-tracker-release.apk" >> $GITHUB_OUTPUT
+            else
+              echo "No APK found"
+              exit 1
+            fi
+          fi
+      
       # ───────────────────────────── make GitHub Release ──────────────────
       - name: Create GitHub release and upload APK
         uses: ncipollo/release-action@v1
@@ -173,6 +220,6 @@ jobs:
           draft: false
           prerelease: false
           allowUpdates: true
-          artifacts: build/app/outputs/flutter-apk/app-release.apk
+          artifacts: ${{ steps.find_apk.outputs.APK_PATH }}
           artifactContentType: application/vnd.android.package-archive
           token: ${{ secrets.GITHUB_TOKEN }}
