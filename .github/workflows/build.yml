@@ -159,7 +159,7 @@ jobs:
         run: flutter build apk -v --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: Releases
           path: |
