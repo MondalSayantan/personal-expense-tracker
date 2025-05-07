@@ -169,8 +169,8 @@ jobs:
           # Ensure Android SDK licenses are accepted
           yes | flutter doctor --android-licenses
 
-          # Set the Java memory to avoid OOM issues
-          export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:MaxPermSize=1g -XX:+HeapDumpOnOutOfMemoryError'"
+          # Set the Java memory to avoid OOM issues (Java 17 compatible)
+          export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -XX:MaxMetaspaceSize=1g'"
 
           # Build APK with verbose logging
           flutter build apk --release --verbose \
