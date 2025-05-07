@@ -50,17 +50,43 @@ jobs:
       - name: Accept Android SDK licences
         run: yes | flutter doctor --android-licenses
 
-      # ───────────────────────────── verify secret early ──────────────────
-      - name: Verify MONGODB_URI secret
-        env:
-          MONGO_SECRET: ${{ secrets.MONGODB_URI }}
+      # ───────────────────────────── verify secrets early ──────────────────
+      - name: Verify necessary secrets
         run: |
+          # Check MongoDB URI secret
+          MONGO_SECRET="${{ secrets.MONGODB_URI }}"
           if [ -z "$MONGO_SECRET" ]; then
             echo "::error::❌  MONGODB_URI secret is not configured."
             echo "        👉  Settings ▸ Secrets ▸ Actions ▸ New repository secret."
             exit 1
           fi
           echo "✅ MONGODB_URI secret detected"
+
+          # Check keystore configuration
+          KEYSTORE_BASE64="${{ secrets.UPLOAD_KEYSTORE }}"
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::⚠️  UPLOAD_KEYSTORE secret is not configured for app signing."
+            echo "        👉  This build will use debug signing keys instead."
+          else
+            echo "✅ Keystore secret detected"
+            
+            # Check for password if keystore exists
+            PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
+            if [ -z "$PASSWORD" ]; then
+              echo "::warning::⚠️  KEYSTORE_PASSWORD secret is not configured for app signing."
+            else
+              echo "✅ Keystore password detected"
+            fi
+            
+            # Check for alias if keystore exists
+            ALIAS="${{ secrets.KEY_ALIAS }}"
+            if [ -z "$ALIAS" ]; then
+              echo "::warning::⚠️  KEY_ALIAS secret is not configured for app signing."
+              echo "        👉  Will use default 'upload' alias if keystore is present."
+            else 
+              echo "✅ Key alias detected"
+            fi
+          fi
 
       # ───────────────────────────── version/tag logic ────────────────────
       - name: Extract version from pubspec.yaml
@@ -94,47 +120,50 @@ jobs:
           flutter --version
           flutter doctor -v
 
+      # ───────────────────────────── setup signing keys ──────────────────
+      - name: Setup Keystore for signing
+        id: setup_keystore
+        run: |
+          KEYSTORE_BASE64="${{ secrets.UPLOAD_KEYSTORE }}"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "::group::Setting up keystore"
+            # Create keystore directory
+            mkdir -p android/app/keystore
+            # Decode base64 keystore and save to file
+            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/keystore/keystore.jks
+            
+            # Set default alias if not provided
+            KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
+            if [ -z "$KEY_ALIAS" ]; then
+              KEY_ALIAS="upload"
+            fi
+            
+            # Create key.properties file
+            cat > android/key.properties << EOF
+            storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+            keyPassword=${{ secrets.KEYSTORE_PASSWORD }}
+            keyAlias=$KEY_ALIAS
+            storeFile=../app/keystore/keystore.jks
+            EOF
+            
+            echo "✅ Keystore and key.properties files created"
+            echo "::endgroup::"
+          else
+            echo "::warning::⚠️ No keystore provided. App will be signed with debug keys."
+          fi
+
       # ───────────────────────────── build (verbose, log to file) ─────────
-      - name: Build release APK (full log)
+
+      - name: Build release APK
         id: flutter_build
-        run: |
-          set -eo pipefail
-          echo "::group::flutter build apk"
-          # Run the build, capture every byte, *and* stream to console
-          flutter build apk -v --release \
-            --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }} 2>&1 | tee flutter_build.log
-          echo "::endgroup::"
+        run: flutter build apk -v --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
 
-      - name: Upload Flutter build log
-        uses: actions/upload-artifact@v4
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v2
         with:
-          name: flutter-build-log
-          path: flutter_build.log
-
-      # ───────────────────────────── locate APK by parsing the log ────────
-      - name: Locate release APK
-        id: locate_apk
-        run: |
-          set -e
-          # First, try to parse the path Flutter prints: "Built <path‑to‑apk> (xx MB)."
-          APK_PATH=$(grep -oE 'build/[^ ]+\.apk' flutter_build.log | head -n1 || true)
-
-          # Fallback: brute‑force search if the above failed
-          if [[ -z "$APK_PATH" ]]; then
-            APK_PATH=$(find build -type f -name '*release*.apk' | head -n1 || true)
-          fi
-
-          if [[ -z "$APK_PATH" ]]; then
-            echo "::error::No release APK produced by the build."
-            exit 1
-          fi
-
-          echo "✅ Found APK at $APK_PATH"
-          echo "APK_PATH=$APK_PATH" >> "$GITHUB_OUTPUT"
-          cp "$APK_PATH" ./app-release.apk
-
-      - name: Verify final artefact
-        run: ls -lh ./app-release.apk
+          name: Releases
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
 
       # ───────────────────────────── make GitHub Release ──────────────────
       - name: Create GitHub release and upload APK
