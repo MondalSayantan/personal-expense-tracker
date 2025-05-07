@@ -152,11 +152,23 @@ jobs:
 
       # ───────────────────────────── build with improved timeout ─────────
       
-      # Download Gradle dependencies separately to avoid timeouts
-      - name: Download Gradle dependencies
+      # Ensure Gradle wrapper exists and has proper permissions
+      - name: Setup Gradle
         run: |
           cd android
-          ./gradlew dependencies
+          ls -la
+          # Check if gradlew exists
+          if [ ! -f "./gradlew" ]; then
+            echo "gradlew file not found - creating it"
+            flutter build apk --no-build # This will generate the gradle wrapper files
+            chmod +x ./gradlew
+          else
+            echo "gradlew file exists"
+            chmod +x ./gradlew
+          fi
+          
+          # Test that gradlew works
+          ./gradlew -v
       
       - name: Build release APK
         id: flutter_build
