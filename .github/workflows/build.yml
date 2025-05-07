@@ -166,7 +166,7 @@ jobs:
 
           # Test that gradlew works
           cd android
-          ./gradlew -v
+          ./gradlew assembleRelease --info --stacktrace
 
       - name: Build release APK
         id: flutter_build
