@@ -179,7 +179,7 @@ jobs:
           export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -XX:MaxMetaspaceSize=1g'"
 
           # Build APK with verbose logging
-          flutter build apk --release --verbose --no-shrink --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
+          flutter build apk --release --verbose --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
 
           # Check if build succeeded
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
