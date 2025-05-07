@@ -151,39 +151,31 @@ jobs:
           fi
 
       # ───────────────────────────── build with improved timeout ─────────
-      
-      # Ensure Gradle wrapper exists and has proper permissions
+
+      # Setup Gradle (ensure permissions)
       - name: Setup Gradle
         run: |
-          cd android
-          ls -la
-          # Check if gradlew exists
-          if [ ! -f "./gradlew" ]; then
-            echo "gradlew file not found - creating it"
-            flutter build apk --no-build # This will generate the gradle wrapper files
-            chmod +x ./gradlew
-          else
-            echo "gradlew file exists"
-            chmod +x ./gradlew
-          fi
+          # Ensure gradlew is executable
+          chmod +x android/gradlew
           
           # Test that gradlew works
+          cd android
           ./gradlew -v
-      
+
       - name: Build release APK
         id: flutter_build
-        timeout-minutes: 15  # Give enough time for the build to complete
+        timeout-minutes: 15 # Give enough time for the build to complete
         run: |
           # Ensure Android SDK licenses are accepted
           yes | flutter doctor --android-licenses
-          
+
           # Set the Java memory to avoid OOM issues
           export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:MaxPermSize=1g -XX:+HeapDumpOnOutOfMemoryError'"
-          
+
           # Build APK with verbose logging
           flutter build apk --release --verbose \
             --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
-          
+
           # Check if build succeeded
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
             echo "Build succeeded! APK created at build/app/outputs/flutter-apk/app-release.apk"
@@ -221,7 +213,7 @@ jobs:
               exit 1
             fi
           fi
-      
+
       # ───────────────────────────── make GitHub Release ──────────────────
       - name: Create GitHub release and upload APK
         uses: ncipollo/release-action@v1
