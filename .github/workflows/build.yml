@@ -159,7 +159,7 @@ jobs:
         run: flutter build apk -v --release --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Releases
           path: |
@@ -175,6 +175,6 @@ jobs:
           draft: false
           prerelease: false
           allowUpdates: true
-          artifacts: ./app-release.apk
+          artifacts: build/app/outputs/flutter-apk/app-release.apk
           artifactContentType: application/vnd.android.package-archive
           token: ${{ secrets.GITHUB_TOKEN }}
