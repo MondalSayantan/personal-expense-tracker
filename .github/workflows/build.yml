@@ -1,25 +1,21 @@
-name: Build and Release
+name: Debug Android Gradle Build
 
 on:
   push:
     branches: [main]
 
-# ───────────────────────────── repository‑level permissions ─────────────────────────────
 permissions:
-  contents: write # needed for creating tags & releases
+  contents: write
 
 jobs:
-  build:
+  debug-gradle:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # same permission inside the job
-
     steps:
       # ───────────────────────────── checkout ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # we need full history & tags for version check
+          fetch-depth: 0
 
       # ───────────────────────────── toolchains ───────────────────────────
       - name: Setup Java
@@ -34,13 +30,21 @@ jobs:
           flutter-version: "3.29.3"
           channel: stable
 
-      # ─── New: generate local.properties so settings.gradle can find Flutter SDK ───
+      # ─── CI-only: generate local.properties so settings.gradle finds Flutter SDK ───
       - name: Create local.properties for Gradle
         working-directory: android
         run: |
           echo "flutter.sdk=$FLUTTER_HOME" > local.properties
 
-      # (optional) cache Pub dependencies
+      # ─── CI-only: generate .env so Flutter asset bundling won’t break ───
+      - name: Create .env file for Flutter assets
+        run: |
+          mkdir -p assets
+          cat <<EOF > assets/.env
+          MONGODB_URI=${{ secrets.MONGODB_URI }}
+          EOF
+
+      # ───────────────────────────── cache & install ────────────────────────
       - name: Cache Pub cache
         uses: actions/cache@v4
         with:
@@ -53,45 +57,24 @@ jobs:
         run: flutter pub get
 
       # ───────────────────────────── accept Android licences ──────────────
-      - name: Accept Android SDK licences
+      - name: Accept Android SDK licenses
         run: yes | flutter doctor --android-licenses
 
       # ───────────────────────────── verify secrets early ──────────────────
       - name: Verify necessary secrets
         run: |
-          # Check MongoDB URI secret
-          MONGO_SECRET="${{ secrets.MONGODB_URI }}"
-          if [ -z "$MONGO_SECRET" ]; then
-            echo "::error::❌  MONGODB_URI secret is not configured."
-            echo "        👉  Settings ▸ Secrets ▸ Actions ▸ New repository secret."
+          if [ -z "${{ secrets.MONGODB_URI }}" ]; then
+            echo "::error::❌  MONGODB_URI is not configured."
             exit 1
           fi
-          echo "✅ MONGODB_URI secret detected"
+          echo "✅ MONGODB_URI detected"
 
-          # Check keystore configuration
-          KEYSTORE_BASE64="${{ secrets.UPLOAD_KEYSTORE }}"
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::⚠️  UPLOAD_KEYSTORE secret is not configured for app signing."
-            echo "        👉  This build will use debug signing keys instead."
+          if [ -z "${{ secrets.UPLOAD_KEYSTORE }}" ]; then
+            echo "::warning::⚠️  UPLOAD_KEYSTORE not configured; using debug key."
           else
             echo "✅ Keystore secret detected"
-            
-            # Check for password if keystore exists
-            PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}"
-            if [ -z "$PASSWORD" ]; then
-              echo "::warning::⚠️  KEYSTORE_PASSWORD secret is not configured for app signing."
-            else
-              echo "✅ Keystore password detected"
-            fi
-            
-            # Check for alias if keystore exists
-            ALIAS="${{ secrets.KEY_ALIAS }}"
-            if [ -z "$ALIAS" ]; then
-              echo "::warning::⚠️  KEY_ALIAS secret is not configured for app signing."
-              echo "        👉  Will use default 'upload' alias if keystore is present."
-            else 
-              echo "✅ Key alias detected"
-            fi
+            [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ] && echo "::warning::⚠️ KEYSTORE_PASSWORD not set"
+            [ -z "${{ secrets.KEY_ALIAS }}" ] && echo "::warning::⚠️ KEY_ALIAS not set; defaulting to 'upload'"
           fi
 
       # ───────────────────────────── version/tag logic ────────────────────
@@ -100,25 +83,20 @@ jobs:
         run: |
           set -e
           VERSION=$(grep -m1 '^version:' pubspec.yaml | cut -d' ' -f2 | sed 's/+.*$//')
-          echo "📦 Detected version $VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check if tag already exists
+      - name: Check if tag exists
         id: tag_exists
         run: |
           if git rev-parse "v${{ steps.version.outputs.VERSION }}" >/dev/null 2>&1; then
             echo "TAG_EXISTS=true" >> "$GITHUB_OUTPUT"
-            echo "🔖 Tag v${{ steps.version.outputs.VERSION }} already exists."
           else
             echo "TAG_EXISTS=false" >> "$GITHUB_OUTPUT"
-            echo "🔖 Tag v${{ steps.version.outputs.VERSION }} does not exist."
           fi
 
-      - name: Exit early if release already published
+      - name: Exit if already released
         if: steps.tag_exists.outputs.TAG_EXISTS == 'true'
-        run: |
-          echo "🚫 Release v${{ steps.version.outputs.VERSION }} already exists. Skipping."
-          exit 0
+        run: exit 0
 
       # ───────────────────────────── environment info ─────────────────────
       - name: Print Flutter environment
@@ -128,107 +106,46 @@ jobs:
 
       # ───────────────────────────── setup signing keys ──────────────────
       - name: Setup Keystore for signing
-        id: setup_keystore
         run: |
-          KEYSTORE_BASE64="${{ secrets.UPLOAD_KEYSTORE }}"
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "::group::Setting up keystore"
-            # Create keystore directory
+          if [ -n "${{ secrets.UPLOAD_KEYSTORE }}" ]; then
             mkdir -p android/app/keystore
-            # Decode base64 keystore and save to file
-            echo "$KEYSTORE_BASE64" | base64 --decode > android/app/keystore/keystore.jks
-            
-            # Set default alias if not provided
+            echo "${{ secrets.UPLOAD_KEYSTORE }}" | base64 --decode > android/app/keystore/keystore.jks
             KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
-            if [ -z "$KEY_ALIAS" ]; then
-              KEY_ALIAS="upload"
-            fi
-            
-            # Create key.properties file using echo statements instead of heredoc
-            echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
-            echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
-            echo "keyAlias=$KEY_ALIAS" >> android/key.properties
-            echo "storeFile=../app/keystore/keystore.jks" >> android/key.properties
-            
-            echo "✅ Keystore and key.properties files created"
-            echo "::endgroup::"
-          else
-            echo "::warning::⚠️ No keystore provided. App will be signed with debug keys."
+            {
+              echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
+              echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "storeFile=../app/keystore/keystore.jks"
+            } > android/key.properties
           fi
 
-      # ───────────────────────────── build with improved timeout ─────────
-
-      # Setup Gradle (ensure permissions)
-      - name: Setup Gradle
+      # ───────────────────── Debug Android build with full logs ──────────
+      - name: Debug Android build with Gradle
+        working-directory: android
         run: |
-          # Ensure gradlew is executable
-          chmod +x android/gradlew
+          set -e
+          echo "1) Cleaning previous outputs"
+          ./gradlew clean
 
-          # Test that gradlew works
-          cd android
-          ./gradlew -v
+          echo "2) Running assembleRelease with debug flags"
+          ./gradlew assembleRelease \
+            --debug \
+            --info \
+            --stacktrace \
+            > ../gradle-release.log 2>&1 || true
 
-      - name: Build release APK
-        id: flutter_build
-        timeout-minutes: 15 # Give enough time for the build to complete
+          echo "=== BEGIN GRADLE LOG ==="
+          sed -n '1,200p' ../gradle-release.log
+          echo "... (snipped) ..."
+          sed -n '200,400p' ../gradle-release.log
+          echo "=== END GRADLE LOG ==="
+
+      # ──────────────────── Fail if APK not produced ─────────────────────
+      - name: Fail if assembleRelease didn’t produce an APK
+        if: always()
+        working-directory: android
         run: |
-          # Ensure Android SDK licenses are accepted
-          yes | flutter doctor --android-licenses
-
-          # Set the Java memory to avoid OOM issues (Java 17 compatible)
-          export GRADLE_OPTS="-Dorg.gradle.jvmargs='-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -XX:MaxMetaspaceSize=1g'"
-
-          # Build APK with verbose logging
-          flutter build apk --release --verbose --dart-define=MONGODB_URI=${{ secrets.MONGODB_URI }}
-
-          # Check if build succeeded
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "Build succeeded! APK created at build/app/outputs/flutter-apk/app-release.apk"
-            ls -la build/app/outputs/flutter-apk/
-          else
-            echo "Build failed or APK not found at expected location"
-            find build -name "*.apk"
+          if [ ! -f "build/outputs/apk/release/app-release.apk" ]; then
+            echo "::error::APK not found—check gradle-release.log for errors."
             exit 1
           fi
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Releases
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-
-      # ───────────────────────────── prepare for GitHub Release ──────────────
-      - name: Find and rename APK for release
-        id: find_apk
-        run: |
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "APK found at expected location"
-            cp build/app/outputs/flutter-apk/app-release.apk ./expense-tracker-release.apk
-            echo "APK_PATH=./expense-tracker-release.apk" >> $GITHUB_OUTPUT
-          else
-            echo "Looking for APK in other locations..."
-            APK_PATH=$(find build -name "*release*.apk" | head -n 1)
-            if [ -n "$APK_PATH" ]; then
-              echo "Found APK at $APK_PATH"
-              cp "$APK_PATH" ./expense-tracker-release.apk
-              echo "APK_PATH=./expense-tracker-release.apk" >> $GITHUB_OUTPUT
-            else
-              echo "No APK found"
-              exit 1
-            fi
-          fi
-
-      # ───────────────────────────── make GitHub Release ──────────────────
-      - name: Create GitHub release and upload APK
-        uses: ncipollo/release-action@v1
-        with:
-          tag: v${{ steps.version.outputs.VERSION }}
-          name: Release v${{ steps.version.outputs.VERSION }}
-          bodyFile: CHANGELOG.md
-          draft: false
-          prerelease: false
-          allowUpdates: true
-          artifacts: ${{ steps.find_apk.outputs.APK_PATH }}
-          artifactContentType: application/vnd.android.package-archive
-          token: ${{ secrets.GITHUB_TOKEN }}
