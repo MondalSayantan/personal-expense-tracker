@@ -138,13 +138,11 @@ jobs:
               KEY_ALIAS="upload"
             fi
             
-            # Create key.properties file
-            cat > android/key.properties << EOF
-            storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-            keyPassword=${{ secrets.KEYSTORE_PASSWORD }}
-            keyAlias=$KEY_ALIAS
-            storeFile=../app/keystore/keystore.jks
-            EOF
+            # Create key.properties file using echo statements instead of heredoc
+            echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > android/key.properties
+            echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
+            echo "keyAlias=$KEY_ALIAS" >> android/key.properties
+            echo "storeFile=../app/keystore/keystore.jks" >> android/key.properties
             
             echo "✅ Keystore and key.properties files created"
             echo "::endgroup::"
